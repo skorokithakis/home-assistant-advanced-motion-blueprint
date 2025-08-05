@@ -11,16 +11,16 @@ blueprint:
       selector:
         entity:
           domain: binary_sensor
-    
+
     light_target:
       name: Lights or switches
       description: The lights or switches to control
       selector:
         entity:
-          domain: 
+          domain:
             - light
             - switch
-    
+
     no_motion_minutes:
       name: Turn off delay
       description: Minutes to wait after last motion before turning lights off
@@ -31,7 +31,7 @@ blueprint:
           max: 60
           unit_of_measurement: minutes
           mode: slider
-    
+
     hours_before_sunset:
       name: Hours before sunset
       description: How many hours before sunset to start responding to motion
@@ -43,14 +43,14 @@ blueprint:
           step: 0.5
           unit_of_measurement: hours
           mode: slider
-    
+
     end_time:
       name: End time
       description: Time to stop responding to motion (e.g., 03:00 for 3am)
       default: "03:00:00"
       selector:
         time:
-    
+
     tracking_helper:
       name: Tracking helper
       description: >
@@ -63,6 +63,7 @@ blueprint:
 variables:
   light_entity: !input light_target
   offset_hours: !input hours_before_sunset
+  end_time_str: !input end_time
 
 mode: single
 
@@ -71,7 +72,7 @@ trigger:
     entity_id: !input motion_sensor
     to: "on"
     id: motion_detected
-  
+
   - platform: state
     entity_id: !input motion_sensor
     to: "off"
@@ -89,18 +90,32 @@ action:
             value_template: "{{ is_state(light_entity, 'off') }}"
           - condition: or
             conditions:
-              # Between configured hours before sunset and midnight
+              # Single template condition that handles the entire time window
               - condition: template
                 value_template: >
-                  {% set current_time = now() %}
-                  {% set sunset = state_attr('sun.sun', 'next_setting') | as_datetime %}
+                  {% set current = now() %}
                   {% set offset_seconds = (offset_hours * 3600) | int %}
-                  {% set start_time = sunset - timedelta(seconds=offset_seconds) %}
-                  {{ start_time <= current_time <= sunset.replace(hour=23, minute=59, second=59) }}
-              # Between midnight and end time
-              - condition: time
-                after: "00:00:00"
-                before: !input end_time
+                  {% set end_hour = end_time_str.split(':')[0] | int %}
+                  {% set end_minute = end_time_str.split(':')[1] | int %}
+
+                  {# Determine if we're in the active period #}
+                  {% if is_state('sun.sun', 'below_horizon') %}
+                    {# Sun is down - check if we're before end time #}
+                    {% if end_hour < 12 %}
+                      {# End time is after midnight (e.g., 3am) #}
+                      {{ current.hour >= 12 or current.hour < end_hour or (current.hour == end_hour and current.minute < end_minute) }}
+                    {% else %}
+                      {# End time is before midnight #}
+                      {{ current.hour < end_hour or (current.hour == end_hour and current.minute < end_minute) }}
+                    {% endif %}
+                  {% else %}
+                    {# Sun is up - check if we're within offset hours before sunset #}
+                    {% set next_setting = state_attr('sun.sun', 'next_setting') | as_timestamp %}
+                    {% set current_ts = as_timestamp(current) %}
+                    {% set until_sunset = next_setting - current_ts %}
+                    {# Only activate if sunset is coming (not if sun is rising) #}
+                    {{ not state_attr('sun.sun', 'rising') and until_sunset >= 0 and until_sunset <= offset_seconds }}
+                  {% endif %}
         sequence:
           - service: homeassistant.turn_on
             target:
@@ -108,7 +123,7 @@ action:
           - service: input_boolean.turn_on
             target:
               entity_id: !input tracking_helper
-      
+
       # No motion for X minutes - turn off if we turned them on
       - conditions:
           - condition: trigger
