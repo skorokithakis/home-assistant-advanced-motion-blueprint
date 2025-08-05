@@ -16,7 +16,7 @@ This workflow needs a helper, but Home Assistant will prompt you to create one i
 
 ## Installation
 
-1. Copy the `advanced-motion-blueprint.yaml` file to your Home Assistant blueprints folder
+1. Import the blueprint into Home Assistant by using the URL `https://raw.githubusercontent.com/skorokithakis/home-assistant-advanced-motion-blueprint/refs/heads/master/advanced-motion-blueprint.yaml`.
 2. Reload automations or restart Home Assistant
 3. Go to Settings → Automations & Scenes
 4. Click "Create Automation"
