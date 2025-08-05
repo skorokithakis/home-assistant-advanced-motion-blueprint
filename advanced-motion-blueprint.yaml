@@ -1,0 +1,125 @@
+blueprint:
+  name: Advanced motion activated lights
+  description: >
+    Turn lights on with motion between a configurable time before sunset and a specific end time.
+    Requires creating an input_boolean helper first.
+  domain: automation
+  input:
+    motion_sensor:
+      name: Motion sensor
+      description: The motion sensor that triggers the lights
+      selector:
+        entity:
+          domain: binary_sensor
+    
+    light_target:
+      name: Lights or switches
+      description: The lights or switches to control
+      selector:
+        entity:
+          domain: 
+            - light
+            - switch
+    
+    no_motion_minutes:
+      name: Turn off delay
+      description: Minutes to wait after last motion before turning lights off
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: minutes
+          mode: slider
+    
+    hours_before_sunset:
+      name: Hours before sunset
+      description: How many hours before sunset to start responding to motion
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 4
+          step: 0.5
+          unit_of_measurement: hours
+          mode: slider
+    
+    end_time:
+      name: End time
+      description: Time to stop responding to motion (e.g., 03:00 for 3am)
+      default: "03:00:00"
+      selector:
+        time:
+    
+    tracking_helper:
+      name: Tracking helper
+      description: >
+        Input boolean helper to track if lights were turned on by this automation.
+        You must create this helper first via Settings > Devices & Services > Helpers
+      selector:
+        entity:
+          domain: input_boolean
+
+variables:
+  light_entity: !input light_target
+  offset_hours: !input hours_before_sunset
+
+mode: single
+
+trigger:
+  - platform: state
+    entity_id: !input motion_sensor
+    to: "on"
+    id: motion_detected
+  
+  - platform: state
+    entity_id: !input motion_sensor
+    to: "off"
+    for:
+      minutes: !input no_motion_minutes
+    id: no_motion
+
+action:
+  - choose:
+      # Motion detected - check conditions and turn on
+      - conditions:
+          - condition: trigger
+            id: motion_detected
+          - condition: template
+            value_template: "{{ is_state(light_entity, 'off') }}"
+          - condition: or
+            conditions:
+              # Between configured hours before sunset and midnight
+              - condition: template
+                value_template: >
+                  {% set current_time = now() %}
+                  {% set sunset = state_attr('sun.sun', 'next_setting') | as_datetime %}
+                  {% set offset_seconds = (offset_hours * 3600) | int %}
+                  {% set start_time = sunset - timedelta(seconds=offset_seconds) %}
+                  {{ start_time <= current_time <= sunset.replace(hour=23, minute=59, second=59) }}
+              # Between midnight and end time
+              - condition: time
+                after: "00:00:00"
+                before: !input end_time
+        sequence:
+          - service: homeassistant.turn_on
+            target:
+              entity_id: !input light_target
+          - service: input_boolean.turn_on
+            target:
+              entity_id: !input tracking_helper
+      
+      # No motion for X minutes - turn off if we turned them on
+      - conditions:
+          - condition: trigger
+            id: no_motion
+          - condition: state
+            entity_id: !input tracking_helper
+            state: "on"
+        sequence:
+          - service: homeassistant.turn_off
+            target:
+              entity_id: !input light_target
+          - service: input_boolean.turn_off
+            target:
+              entity_id: !input tracking_helper
